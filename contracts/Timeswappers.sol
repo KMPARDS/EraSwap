@@ -1,20 +1,11 @@
-pragma solidity ^ 0.5.7;
-contract ERC20Token {
-    function totalSupply() public view returns (uint);
-    function balanceOf(address tokenOwner) public view returns (uint balance);
-    function allowance(address tokenOwner, address spender) public view returns (uint remaining);
-    function transfer(address to, uint tokens) public returns (bool success);
-    function approve(address spender, uint tokens) public returns (bool success);
-    function transferFrom(address from, address to, uint tokens) public returns (bool success);
+pragma solidity ^ 0.4.24;
+import './Eraswap.sol';
 
-    event Transfer(address indexed from, address indexed to, uint tokens);
-    event Approval(address indexed tokenOwner, address indexed spender, uint tokens);
-}
-
-contract Timeswappers {
+contract Timeswappers is Ownable{
+    using SafeMath for uint256; 
 
     address public owner;
-    ERC20Token public token;
+    EraswapToken token;
 
     struct Project {
         address buyer;
@@ -43,8 +34,20 @@ contract Timeswappers {
 
     mapping(address => Project[]) public buyerDatabase;
     mapping(address => TransactionStruct[]) public sellerDatabase;
+    mapping(address => TransactionStruct[]) public escrowDatabase;
     mapping(address => Curators) public curatorDatabase;
     mapping(address => uint) public Funds;
+    mapping(address => uint) public KycSellers;
+    
+    event ProjectInitiated(address buyer, address seller, uint amount, uint nounce);
+    event CuratorInitiated(address curator, uint time);
+    event Curatorclaimed(address curator);
+    event FundsReleased(address buyer, address seller, uint amount, uint nounce);
+    event FundsRefunded(address buyer, address seller, uint amount, uint nounce);
+    event DisputeEscalated(address buyer, uint nounce);
+    event KycDeducted(address user, uint amount);
+    event FundsWithdrawn(address user, uint amount);
+    event EscrowDecision(address buyer, address seller, uint nounce, uint decision);
     
     function TokenTimelock() public {
       require(token.balanceOf(msg.sender) > 10000000000000000000000);
@@ -52,6 +55,7 @@ contract Timeswappers {
     curatorDatabase[msg.sender].beneficiary = msg.sender;
     curatorDatabase[msg.sender].amount = 10000000000000000000000;
     curatorDatabase[msg.sender].releaseTime = now + 180 days;
+    emit CuratorInitiated(msg.sender, now);
     }
     
       function claim() public {
@@ -60,41 +64,48 @@ contract Timeswappers {
     require(token.balanceOf(address(this)) > curatorDatabase[msg.sender].amount);
 
     token.transfer(curatorDatabase[msg.sender].beneficiary, curatorDatabase[msg.sender].amount);
-  }
+    emit Curatorclaimed(msg.sender);
+    }
   
     constructor(address _tokentobeused) public {
-        token = ERC20Token(_tokentobeused);
-        owner = msg.sender;
+       token = EraswapToken(_tokentobeused);
     }
 
     function () external payable {
 
     }
-
+    
+    function kycfee(uint amount) public {
+        token.transferFrom(msg.sender, address(this), amount);
+        KycSellers[msg.sender]= amount;
+        emit KycDeducted(msg.sender, amount);
+    } 
+    
     function NewEscrow(address sellerAddress, uint amount, bytes32 notes) public returns(bool) {
         Project memory currentEscrow;
         TransactionStruct memory currentTransaction;
+        uint newamount = (amount.mul(995)).div(1000);
         currentEscrow.buyer = msg.sender;
         currentEscrow.seller = sellerAddress;
-        currentEscrow.amount = amount;
+        currentEscrow.amount = newamount;
         currentEscrow.note = notes;
+        Funds[owner] = (amount.mul(5)).div(1000);
         token.transferFrom(msg.sender, address(this), amount);
 
         currentTransaction.buyer = msg.sender;
         currentTransaction.buyer_nounce = buyerDatabase[msg.sender].length;
         sellerDatabase[sellerAddress].push(currentTransaction);
+        //escrowDatabase[escrowAddress].push(currentTransaction);
         buyerDatabase[msg.sender].push(currentEscrow);
-
+        emit ProjectInitiated(msg.sender, sellerAddress, amount, buyerDatabase[msg.sender].length);
         return true;
     }
 
-    //0. Buyer 1. Seller 2. Escrow
+    //0. Buyer 1. Seller
     function getNumTransactions(address inputAddress, uint specifier) view public returns(uint) {
         if (specifier == 0) return (buyerDatabase[inputAddress].length);
 
         else if (specifier == 1) return (sellerDatabase[inputAddress].length);
-
-        else return (escrowDatabase[inputAddress].length);
     }
 
     function getSpecificTransaction(address inputAddress, uint switcher, uint ID) view public returns(address, address, address[] memory, uint, bytes32, bytes32) {
@@ -108,11 +119,6 @@ contract Timeswappers {
         {
             currentEscrow = buyerDatabase[sellerDatabase[inputAddress][ID].buyer][sellerDatabase[inputAddress][ID].buyer_nounce];
             status = checkStatus(currentEscrow.buyer, sellerDatabase[inputAddress][ID].buyer_nounce);
-        } else if (switcher == 2)
-
-        {
-            currentEscrow = buyerDatabase[escrowDatabase[inputAddress][ID].buyer][escrowDatabase[inputAddress][ID].buyer_nounce];
-            status = checkStatus(currentEscrow.buyer, escrowDatabase[inputAddress][ID].buyer_nounce);
         }
 
         return (currentEscrow.buyer, currentEscrow.seller, currentEscrow.curators, currentEscrow.amount, status, currentEscrow.note);
@@ -156,6 +162,24 @@ contract Timeswappers {
         return (buyers, amounts, statuses);
     }
 
+    function escrowHistory(address inputAddress, uint startID, uint numToLoad) view public returns(address[] memory, address[] memory, uint[] memory, bytes32[] memory) {
+
+        address[] memory buyers = new address[](numToLoad);
+        address[] memory sellers = new address[](numToLoad);
+        uint[] memory amounts = new uint[](numToLoad);
+        bytes32[] memory statuses = new bytes32[](numToLoad);
+
+        for (uint i = 0; i < numToLoad; i++) {
+            if (i >= escrowDatabase[inputAddress].length)
+                break;
+            buyers[i] = escrowDatabase[inputAddress][startID + i].buyer;
+            sellers[i] = buyerDatabase[buyers[i]][escrowDatabase[inputAddress][startID + i].buyer_nounce].seller;
+            amounts[i] = buyerDatabase[buyers[i]][escrowDatabase[inputAddress][startID + i].buyer_nounce].amount;
+            statuses[i] = checkStatus(buyers[i], escrowDatabase[inputAddress][startID + i].buyer_nounce);
+        }
+        return (buyers, sellers, amounts, statuses);
+    }
+
     function checkStatus(address buyerAddress, uint nounce) view public returns(bytes32) {
 
         bytes32 status = "";
@@ -187,6 +211,7 @@ contract Timeswappers {
 
         //Move funds under seller's owership
         Funds[seller] += amount;
+        emit FundsReleased(msg.sender, seller, amount, ID);
     }
 
     function sellerRefund(uint ID) public {
@@ -203,6 +228,7 @@ contract Timeswappers {
         buyerDatabase[buyerAddress][buyerID].refund_approval = true;
 
         Funds[buyerAddress] += amount;
+        emit FundsRefunded(buyerAddress, msg.sender, amount, buyerID);
     }
 
     function EscrowEscalation(uint switcher, uint ID, address[5] memory curatorsfortheproject) public {
@@ -233,13 +259,11 @@ contract Timeswappers {
             buyerDatabase[buyerAddress][buyerID].curators.push(curatorsfortheproject[i]);
         }
         buyerDatabase[buyerAddress][buyerID].escrow_intervention = true;
-
-
+        emit DisputeEscalated(buyerAddress, buyerID);
     }
 
-    function escrowDecision(uint ID, address selleraddress, uint Decision) public {
+    function escrowDecision(uint ID, address selleraddress, uint Decision) public onlyOwner{
         
-        require(msg.sender == owner);
         address buyerAddress = sellerDatabase[selleraddress][ID].buyer;
         uint buyerID = sellerDatabase[selleraddress][ID].buyer_nounce;
 
@@ -260,6 +284,8 @@ contract Timeswappers {
             buyerDatabase[buyerAddress][buyerID].release_approval = true;
             Funds[buyerDatabase[buyerAddress][buyerID].seller] += amount;
         }
+        
+        emit EscrowDecision(buyerAddress, selleraddress, ID, Decision);
     }
 
     function WithdrawFunds() public {
@@ -267,6 +293,7 @@ contract Timeswappers {
         Funds[msg.sender] = 0;
         if (!token.transfer(msg.sender, amount))
             Funds[msg.sender] = amount;
+        emit FundsWithdrawn(msg.sender, amount);
     }
 
 }

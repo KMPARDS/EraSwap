@@ -1,8 +1,9 @@
-pragma solidity ^ 0.4.24;
+pragma solidity ^ 0.4 .24;
 import './Eraswap.sol';
 
-contract Timeswappers is Ownable{
-    using SafeMath for uint256; 
+contract Timeswappers is Ownable {
+    using SafeMath
+    for uint256;
 
     address public owner;
     EraswapToken token;
@@ -19,13 +20,13 @@ contract Timeswappers is Ownable{
 
         bytes32 note;
     }
-    
-    struct Curators{
+
+    struct Curators {
         address beneficiary;
         uint amount;
         uint releaseTime;
     }
-    
+
     struct TransactionStruct {
         //Links to transaction from buyer
         address buyer; //Person who is making payment
@@ -38,7 +39,7 @@ contract Timeswappers is Ownable{
     mapping(address => Curators) public curatorDatabase;
     mapping(address => uint) public Funds;
     mapping(address => uint) public KycSellers;
-    
+
     event ProjectInitiated(address buyer, address seller, uint amount, uint nounce);
     event CuratorInitiated(address curator, uint time);
     event Curatorclaimed(address curator);
@@ -48,39 +49,39 @@ contract Timeswappers is Ownable{
     event KycDeducted(address user, uint amount);
     event FundsWithdrawn(address user, uint amount);
     event EscrowDecision(address buyer, address seller, uint nounce, uint decision);
-    
-    function TokenTimelock() public {
-      require(token.balanceOf(msg.sender) > 10000000000000000000000);
-    token.transferFrom(msg.sender, address(this), 10000000000000000000000);
-    curatorDatabase[msg.sender].beneficiary = msg.sender;
-    curatorDatabase[msg.sender].amount = 10000000000000000000000;
-    curatorDatabase[msg.sender].releaseTime = now + 180 days;
-    emit CuratorInitiated(msg.sender, now);
-    }
-    
-      function claim() public {
-    require(msg.sender == curatorDatabase[msg.sender].beneficiary);
-    require(now >= curatorDatabase[msg.sender].releaseTime);
-    require(token.balanceOf(address(this)) > curatorDatabase[msg.sender].amount);
 
-    token.transfer(curatorDatabase[msg.sender].beneficiary, curatorDatabase[msg.sender].amount);
-    emit Curatorclaimed(msg.sender);
+    function TokenTimelock() public {
+        require(token.balanceOf(msg.sender) > 10000000000000000000000);
+        token.transferFrom(msg.sender, address(this), 10000000000000000000000);
+        curatorDatabase[msg.sender].beneficiary = msg.sender;
+        curatorDatabase[msg.sender].amount = 10000000000000000000000;
+        curatorDatabase[msg.sender].releaseTime = now + 180 days;
+        emit CuratorInitiated(msg.sender, now);
     }
-  
+
+    function claim() public {
+        require(msg.sender == curatorDatabase[msg.sender].beneficiary);
+        require(now >= curatorDatabase[msg.sender].releaseTime);
+        require(token.balanceOf(address(this)) > curatorDatabase[msg.sender].amount);
+
+        token.transfer(curatorDatabase[msg.sender].beneficiary, curatorDatabase[msg.sender].amount);
+        emit Curatorclaimed(msg.sender);
+    }
+
     constructor(address _tokentobeused) public {
-       token = EraswapToken(_tokentobeused);
+        token = EraswapToken(_tokentobeused);
     }
 
     function () external payable {
 
     }
-    
+
     function kycfee(uint amount) public {
         token.transferFrom(msg.sender, address(this), amount);
-        KycSellers[msg.sender]= amount;
+        KycSellers[msg.sender] = amount;
         emit KycDeducted(msg.sender, amount);
-    } 
-    
+    }
+
     function NewEscrow(address sellerAddress, uint amount, bytes32 notes) public returns(bool) {
         Project memory currentEscrow;
         TransactionStruct memory currentTransaction;
@@ -255,15 +256,15 @@ contract Timeswappers is Ownable{
             buyerDatabase[buyerAddress][buyerID].refund_approval == false);
 
         //Activate the ability for Escrow Agent to intervent in this transaction
-        for(uint i = 0; i < curatorsfortheproject.length; i++) {
+        for (uint i = 0; i < curatorsfortheproject.length; i++) {
             buyerDatabase[buyerAddress][buyerID].curators.push(curatorsfortheproject[i]);
         }
         buyerDatabase[buyerAddress][buyerID].escrow_intervention = true;
         emit DisputeEscalated(buyerAddress, buyerID);
     }
 
-    function escrowDecision(uint ID, address selleraddress, uint Decision) public onlyOwner{
-        
+    function escrowDecision(uint ID, address selleraddress, uint Decision) public onlyOwner {
+
         address buyerAddress = sellerDatabase[selleraddress][ID].buyer;
         uint buyerID = sellerDatabase[selleraddress][ID].buyer_nounce;
 
@@ -284,7 +285,7 @@ contract Timeswappers is Ownable{
             buyerDatabase[buyerAddress][buyerID].release_approval = true;
             Funds[buyerDatabase[buyerAddress][buyerID].seller] += amount;
         }
-        
+
         emit EscrowDecision(buyerAddress, selleraddress, ID, Decision);
     }
 

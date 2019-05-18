@@ -1,149 +1,299 @@
-pragma solidity ^ 0.5.7;
+pragma solidity ^ 0.4.24;
+import './Eraswap.sol';
 
-contract ERC20Token {
-    function balanceOf(address tokenOwner) public view returns (uint balance);
-    function transfer(address to, uint tokens) public returns (bool success);
-}
+contract Timeswappers is Ownable{
+    using SafeMath for uint256; 
 
-library SafeMath {
-  function mul(uint256 a, uint256 b) internal pure returns (uint256) {
-    if (a == 0) {
-      return 0;
-    }
-    uint256 c = a * b;
-    assert(c / a == b);
-    return c;
-  }
+    address public owner;
+    EraswapToken token;
 
-  function div(uint256 a, uint256 b) internal pure returns (uint256) {
-    // assert(b > 0); // Solidity automatically throws when dividing by 0
-    uint256 c = a / b;
-    // assert(a == b * c + a % b); // There is no case in which this doesn't hold
-    return c;
-  }
+    struct Project {
+        address buyer;
+        address seller;
+        address[] curators;
 
-  function sub(uint256 a, uint256 b) internal pure returns (uint256) {
-    assert(b <= a);
-    return a - b;
-  }
+        uint amount;
+        bool escrow_intervention;
+        bool release_approval;
+        bool refund_approval;
 
-  function add(uint256 a, uint256 b) internal pure returns (uint256) {
-    uint256 c = a + b;
-    assert(c >= a);
-    return c;
-  }
-}
-
-contract Ownable {
-  address public owner;
-
-
-  event OwnershipRenounced(address indexed previousOwner);
-  event OwnershipTransferred(
-    address indexed previousOwner,
-    address indexed newOwner
-  );
-
-
-  /**
-   * @dev The Ownable constructor sets the original `owner` of the contract to the sender
-   * account.
-   */
-  constructor() public {
-    owner = msg.sender;
-  }
-
-  /**
-   * @dev Throws if called by any account other than the owner.
-   */
-  modifier onlyOwner() {
-    require(msg.sender == owner);
-    _;
-  }
-
-  /**
-   * @dev Allows the current owner to relinquish control of the contract.
-   * @notice Renouncing to ownership will leave the contract without an owner.
-   * It will not be possible to call the functions with the `onlyOwner`
-   * modifier anymore.
-   */
-  function renounceOwnership() public onlyOwner {
-    emit OwnershipRenounced(owner);
-    owner = address(0);
-  }
-
-  /**
-   * @dev Allows the current owner to transfer control of the contract to a newOwner.
-   * @param _newOwner The address to transfer ownership to.
-   */
-  function transferOwnership(address _newOwner) public onlyOwner {
-    _transferOwnership(_newOwner);
-  }
-
-  /**
-   * @dev Transfers control of the contract to a newOwner.
-   * @param _newOwner The address to transfer ownership to.
-   */
-  function _transferOwnership(address _newOwner) internal {
-    require(_newOwner != address(0));
-    emit OwnershipTransferred(owner, _newOwner);
-    owner = _newOwner;
-  }
-}
-
-contract EraswapDistribution is Ownable {
-     using SafeMath for uint256;
-    
-  ERC20Token public token;
-    
-    struct Rewarddetails{
-        uint256 curatorreward;
-        uint256 timetraderreward;
-        uint256 dayswappersreward;
-        uint256 powertokenreward;
-        uint256 buzcaferewards;
-        uint256 total;
-    }
-    event rewardrequested(address user);
-    event rewardupdated(address user, uint totalreward);
-    
-    mapping(address => Rewarddetails) public distributionDetails;
-    mapping(address => uint256) public lastrequestedtime;
-    
-        constructor(address _tokentobeused) public {
-        token = ERC20Token(_tokentobeused);
+        bytes32 note;
     }
     
-    function requestrewardupdate() public {
-        require((lastrequestedtime[msg.sender] - now) > 30 days, "30 days not completed");
-        lastrequestedtime[msg.sender] = now;
-        emit rewardrequested(msg.sender);    
+    struct Curators{
+        address beneficiary;
+        uint amount;
+        uint releaseTime;
     }
     
-    function updaterewarddetails(address _user, uint256[5] memory rewards) public onlyOwner returns(bool){
-        distributionDetails[_user].curatorreward = distributionDetails[_user].curatorreward.add(rewards[0]);
-        distributionDetails[_user].timetraderreward= distributionDetails[_user].timetraderreward.add(rewards[1]);
-        distributionDetails[_user].dayswappersreward= distributionDetails[_user].dayswappersreward.add(rewards[2]);
-        distributionDetails[_user].powertokenreward= distributionDetails[_user].powertokenreward.add(rewards[3]);
-        distributionDetails[_user].buzcaferewards = distributionDetails[_user].buzcaferewards.add(rewards[4]);
-        uint256 totaltoken = rewards[0].add(rewards[1]).add(rewards[2]).add(rewards[3]).add(rewards[4]);
-        distributionDetails[_user].total = distributionDetails[_user].total.add(totaltoken);
-        emit rewardupdated(_user, totaltoken);
+    struct TransactionStruct {
+        //Links to transaction from buyer
+        address buyer; //Person who is making payment
+        uint buyer_nounce; //Nounce of buyer transaction                            
+    }
+
+    mapping(address => Project[]) public buyerDatabase;
+    mapping(address => TransactionStruct[]) public sellerDatabase;
+    mapping(address => TransactionStruct[]) public escrowDatabase;
+    mapping(address => Curators) public curatorDatabase;
+    mapping(address => uint) public Funds;
+    mapping(address => uint) public KycSellers;
+    
+    event ProjectInitiated(address buyer, address seller, uint amount, uint nounce);
+    event CuratorInitiated(address curator, uint time);
+    event Curatorclaimed(address curator);
+    event FundsReleased(address buyer, address seller, uint amount, uint nounce);
+    event FundsRefunded(address buyer, address seller, uint amount, uint nounce);
+    event DisputeEscalated(address buyer, uint nounce);
+    event KycDeducted(address user, uint amount);
+    event FundsWithdrawn(address user, uint amount);
+    event EscrowDecision(address buyer, address seller, uint nounce, uint decision);
+    
+    function TokenTimelock() public {
+      require(token.balanceOf(msg.sender) > 10000000000000000000000);
+    token.transferFrom(msg.sender, address(this), 10000000000000000000000);
+    curatorDatabase[msg.sender].beneficiary = msg.sender;
+    curatorDatabase[msg.sender].amount = 10000000000000000000000;
+    curatorDatabase[msg.sender].releaseTime = now + 180 days;
+    emit CuratorInitiated(msg.sender, now);
+    }
+    
+      function claim() public {
+    require(msg.sender == curatorDatabase[msg.sender].beneficiary);
+    require(now >= curatorDatabase[msg.sender].releaseTime);
+    require(token.balanceOf(address(this)) > curatorDatabase[msg.sender].amount);
+
+    token.transfer(curatorDatabase[msg.sender].beneficiary, curatorDatabase[msg.sender].amount);
+    emit Curatorclaimed(msg.sender);
+    }
+  
+    constructor(address _tokentobeused) public {
+       token = EraswapToken(_tokentobeused);
+    }
+
+    function () external payable {
+
+    }
+    
+    function kycfee(uint amount) public {
+        token.transferFrom(msg.sender, address(this), amount);
+        KycSellers[msg.sender]= amount;
+        emit KycDeducted(msg.sender, amount);
+    } 
+    
+    function NewEscrow(address sellerAddress, uint amount, bytes32 notes) public returns(bool) {
+        Project memory currentEscrow;
+        TransactionStruct memory currentTransaction;
+        uint newamount = (amount.mul(995)).div(1000);
+        currentEscrow.buyer = msg.sender;
+        currentEscrow.seller = sellerAddress;
+        currentEscrow.amount = newamount;
+        currentEscrow.note = notes;
+        Funds[owner] = (amount.mul(5)).div(1000);
+        token.transferFrom(msg.sender, address(this), amount);
+
+        currentTransaction.buyer = msg.sender;
+        currentTransaction.buyer_nounce = buyerDatabase[msg.sender].length;
+        sellerDatabase[sellerAddress].push(currentTransaction);
+        //escrowDatabase[escrowAddress].push(currentTransaction);
+        buyerDatabase[msg.sender].push(currentEscrow);
+        emit ProjectInitiated(msg.sender, sellerAddress, amount, buyerDatabase[msg.sender].length);
         return true;
     }
-    
-    function claimrewards() public {
-        require((now - lastrequestedtime[msg.sender]) > 30 days, "30 days not completed");
-        uint256 totalrewards= distributionDetails[msg.sender].curatorreward.add(distributionDetails[msg.sender].timetraderreward).add(distributionDetails[msg.sender].dayswappersreward).add(distributionDetails[msg.sender].powertokenreward).add(distributionDetails[msg.sender].buzcaferewards);
-        require(token.balanceOf(address(this)) >= totalrewards, "Insufficient funds");
-        distributionDetails[msg.sender].curatorreward = 0;
-        distributionDetails[msg.sender].timetraderreward = 0;
-        distributionDetails[msg.sender].dayswappersreward= 0;
-        distributionDetails[msg.sender].powertokenreward= 0;
-        distributionDetails[msg.sender].buzcaferewards = 0;
-        distributionDetails[msg.sender].total= 0;
-        lastrequestedtime[msg.sender] = now;
-        token.transfer(msg.sender, totalrewards);
+
+    //0. Buyer 1. Seller
+    function getNumTransactions(address inputAddress, uint specifier) view public returns(uint) {
+        if (specifier == 0) return (buyerDatabase[inputAddress].length);
+
+        else if (specifier == 1) return (sellerDatabase[inputAddress].length);
     }
-    
+
+    function getSpecificTransaction(address inputAddress, uint switcher, uint ID) view public returns(address, address, address[] memory, uint, bytes32, bytes32) {
+        bytes32 status;
+        Project memory currentEscrow;
+        if (switcher == 0) {
+            currentEscrow = buyerDatabase[inputAddress][ID];
+            status = checkStatus(inputAddress, ID);
+        } else if (switcher == 1)
+
+        {
+            currentEscrow = buyerDatabase[sellerDatabase[inputAddress][ID].buyer][sellerDatabase[inputAddress][ID].buyer_nounce];
+            status = checkStatus(currentEscrow.buyer, sellerDatabase[inputAddress][ID].buyer_nounce);
+        }
+
+        return (currentEscrow.buyer, currentEscrow.seller, currentEscrow.curators, currentEscrow.amount, status, currentEscrow.note);
+
+    }
+
+    function buyerHistory(address buyerAddress, uint startId, uint numToLoad) view public returns(address[] memory, address[] memory, uint[] memory, bytes32[] memory) {
+
+        uint length;
+        if (buyerDatabase[buyerAddress].length < numToLoad)
+            length = buyerDatabase[buyerAddress].length;
+
+        else
+            length = numToLoad;
+        address[] memory sellers = new address[](length);
+        address[] memory escrow_agents = new address[](length);
+        uint[] memory amounts = new uint[](length);
+        bytes32[] memory statuses = new bytes32[](length);
+        for (uint i = 0; i < length; i++) {
+
+            sellers[i] = (buyerDatabase[buyerAddress][startId + i].seller);
+            escrow_agents[i] = (buyerDatabase[buyerAddress][startId + i].curators[1]);
+            amounts[i] = (buyerDatabase[buyerAddress][startId + i].amount);
+            statuses[i] = checkStatus(buyerAddress, startId + i);
+        }
+        return (sellers, escrow_agents, amounts, statuses);
+    }
+
+    function sellerHistory(address sellerAddress, uint startId, uint numToLoad) view public returns(address[] memory, uint[] memory, bytes32[] memory) {
+        address[] memory buyers = new address[](numToLoad);
+        uint[] memory amounts = new uint[](numToLoad);
+        bytes32[] memory statuses = new bytes32[](numToLoad);
+
+        for (uint i = 0; i < numToLoad; i++) {
+            if (i >= sellerDatabase[sellerAddress].length)
+                break;
+            buyers[i] = sellerDatabase[sellerAddress][startId + i].buyer;
+            amounts[i] = buyerDatabase[buyers[i]][sellerDatabase[sellerAddress][startId + i].buyer_nounce].amount;
+            statuses[i] = checkStatus(buyers[i], sellerDatabase[sellerAddress][startId + i].buyer_nounce);
+        }
+        return (buyers, amounts, statuses);
+    }
+
+    function escrowHistory(address inputAddress, uint startID, uint numToLoad) view public returns(address[] memory, address[] memory, uint[] memory, bytes32[] memory) {
+
+        address[] memory buyers = new address[](numToLoad);
+        address[] memory sellers = new address[](numToLoad);
+        uint[] memory amounts = new uint[](numToLoad);
+        bytes32[] memory statuses = new bytes32[](numToLoad);
+
+        for (uint i = 0; i < numToLoad; i++) {
+            if (i >= escrowDatabase[inputAddress].length)
+                break;
+            buyers[i] = escrowDatabase[inputAddress][startID + i].buyer;
+            sellers[i] = buyerDatabase[buyers[i]][escrowDatabase[inputAddress][startID + i].buyer_nounce].seller;
+            amounts[i] = buyerDatabase[buyers[i]][escrowDatabase[inputAddress][startID + i].buyer_nounce].amount;
+            statuses[i] = checkStatus(buyers[i], escrowDatabase[inputAddress][startID + i].buyer_nounce);
+        }
+        return (buyers, sellers, amounts, statuses);
+    }
+
+    function checkStatus(address buyerAddress, uint nounce) view public returns(bytes32) {
+
+        bytes32 status = "";
+
+        if (buyerDatabase[buyerAddress][nounce].release_approval) {
+            status = "Complete";
+        } else if (buyerDatabase[buyerAddress][nounce].refund_approval) {
+            status = "Refunded";
+        } else if (buyerDatabase[buyerAddress][nounce].escrow_intervention) {
+            status = "Pending Escrow Decision";
+        } else {
+            status = "In Progress";
+        }
+
+        return (status);
+    }
+
+    function buyerFundRelease(uint ID) public {
+        require(ID < buyerDatabase[msg.sender].length &&
+            buyerDatabase[msg.sender][ID].release_approval == false &&
+            buyerDatabase[msg.sender][ID].refund_approval == false);
+
+        //Set release approval to true. Ensure approval for each transaction can only be called once.
+        buyerDatabase[msg.sender][ID].release_approval = true;
+
+        address seller = buyerDatabase[msg.sender][ID].seller;
+
+        uint amount = buyerDatabase[msg.sender][ID].amount;
+
+        //Move funds under seller's owership
+        Funds[seller] += amount;
+        emit FundsReleased(msg.sender, seller, amount, ID);
+    }
+
+    function sellerRefund(uint ID) public {
+        address buyerAddress = sellerDatabase[msg.sender][ID].buyer;
+        uint buyerID = sellerDatabase[msg.sender][ID].buyer_nounce;
+
+        require(
+            buyerDatabase[buyerAddress][buyerID].release_approval == false &&
+            buyerDatabase[buyerAddress][buyerID].refund_approval == false);
+
+        uint amount = buyerDatabase[buyerAddress][buyerID].amount;
+
+        //Once approved, buyer can invoke WithdrawFunds to claim his refund
+        buyerDatabase[buyerAddress][buyerID].refund_approval = true;
+
+        Funds[buyerAddress] += amount;
+        emit FundsRefunded(buyerAddress, msg.sender, amount, buyerID);
+    }
+
+    function EscrowEscalation(uint switcher, uint ID, address[5] memory curatorsfortheproject) public {
+        //To activate EscrowEscalation
+        //1) Buyer must not have approved fund release.
+        //2) Seller must not have approved a refund.
+        //3) EscrowEscalation is being activated for the first time
+
+        //There is no difference whether the buyer or seller activates EscrowEscalation.
+        address buyerAddress;
+        uint buyerID; //transaction ID of in buyer's history
+        if (switcher == 0) // Buyer
+        {
+            buyerAddress = msg.sender;
+            buyerID = ID;
+        } else if (switcher == 1) //Seller
+        {
+            buyerAddress = sellerDatabase[msg.sender][ID].buyer;
+            buyerID = sellerDatabase[msg.sender][ID].buyer_nounce;
+        }
+
+        require(buyerDatabase[buyerAddress][buyerID].escrow_intervention == false &&
+            buyerDatabase[buyerAddress][buyerID].release_approval == false &&
+            buyerDatabase[buyerAddress][buyerID].refund_approval == false);
+
+        //Activate the ability for Escrow Agent to intervent in this transaction
+        for(uint i = 0; i < curatorsfortheproject.length; i++) {
+            buyerDatabase[buyerAddress][buyerID].curators.push(curatorsfortheproject[i]);
+        }
+        buyerDatabase[buyerAddress][buyerID].escrow_intervention = true;
+        emit DisputeEscalated(buyerAddress, buyerID);
+    }
+
+    function escrowDecision(uint ID, address selleraddress, uint Decision) public onlyOwner{
+        
+        address buyerAddress = sellerDatabase[selleraddress][ID].buyer;
+        uint buyerID = sellerDatabase[selleraddress][ID].buyer_nounce;
+
+        require(
+            buyerDatabase[buyerAddress][buyerID].release_approval == false &&
+            buyerDatabase[buyerAddress][buyerID].escrow_intervention == true &&
+            buyerDatabase[buyerAddress][buyerID].refund_approval == false);
+
+        uint amount = buyerDatabase[buyerAddress][buyerID].amount;
+
+        if (Decision == 0) //Refund Buyer
+        {
+            buyerDatabase[buyerAddress][buyerID].refund_approval = true;
+            Funds[buyerAddress] += amount;
+
+        } else if (Decision == 1) //Release funds to Seller
+        {
+            buyerDatabase[buyerAddress][buyerID].release_approval = true;
+            Funds[buyerDatabase[buyerAddress][buyerID].seller] += amount;
+        }
+        
+        emit EscrowDecision(buyerAddress, selleraddress, ID, Decision);
+    }
+
+    function WithdrawFunds() public {
+        uint amount = Funds[msg.sender];
+        Funds[msg.sender] = 0;
+        if (!token.transfer(msg.sender, amount))
+            Funds[msg.sender] = amount;
+        emit FundsWithdrawn(msg.sender, amount);
+    }
+
 }

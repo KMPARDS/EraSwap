@@ -15,12 +15,12 @@
   "devDependencies": {
     "@audits/truffle-test-generator": "^1.0.1",
     "chai-bn": "^0.1.1",
-    "lite-server": "^2.3.0",
+    "lite-server": "^2.5.3",
     "openzeppelin-test-helpers": "^0.3.2"
   },
   "dependencies": {
     "chai": "^4.2.0",
     "chai-http": "^4.3.0",
-    "openzeppelin-solidity": "^2.2.0"
+    "openzeppelin-solidity": "^2.3.0"
   }
 }
